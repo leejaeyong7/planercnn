@@ -462,15 +462,16 @@ class RefinementNet(nn.Module):
 
         if 'large' in options.suffix:
             self.upsample = torch.nn.Upsample(size=(480, 640), mode='bilinear')
-            self.plane_to_depth = PlaneToDepth(normalized_K=True, W=640, H=480)
+            self.plane_to_depth = PlaneToDepth(options, normalized_K=True, W=640, H=480)
         else:
             self.upsample = torch.nn.Upsample(size=(192, 256), mode='bilinear')            
-            self.plane_to_depth = PlaneToDepth(normalized_K=True, W=256, H=192)
+            self.plane_to_depth = PlaneToDepth(options, normalized_K=True, W=256, H=192)
             pass
         return
     
     def forward(self, image_1, camera, prev_result):
         masks = prev_result['mask']
+        dev = image_1.device
 
         if 'refine_only' in self.options.suffix:
             with torch.no_grad():
@@ -495,7 +496,7 @@ class RefinementNet(nn.Module):
         result['all_depths'] = all_depths
         result['all_masks'] = all_masks
         
-        all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).cuda().long().view(-1, 1, 1)).float()
+        all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).to(dev).long().view(-1, 1, 1)).float()
         plane_depth_one_hot = (all_depths * all_masks_one_hot).sum(0, keepdim=True)
         result['plane_depth_one_hot'] = plane_depth_one_hot.unsqueeze(1)
         return result
@@ -518,7 +519,7 @@ class RefinementNetConcat(nn.Module):
         max_num_planes = 30
         num_planes = int(masks.shape[1])
         if num_planes < max_num_planes:
-            masks = torch.cat([masks, torch.zeros((1, max_num_planes - num_planes, int(masks.shape[2]), int(masks.shape[3]))).cuda()], dim=1)
+            masks = torch.cat([masks, torch.zeros((1, max_num_planes - num_planes, int(masks.shape[2]), int(masks.shape[3]))).to(options.device)], dim=1)
             pass
         prev_predictions = torch.cat([image_1, prev_result['plane_depth'], prev_result['depth'], masks], dim=1)
         masks = self.refinement_block(prev_predictions)
@@ -538,7 +539,7 @@ class RefinementNetConcat(nn.Module):
         result['all_depths'] = all_depths
         result['all_masks'] = all_masks
         
-        all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).cuda().long().view(-1, 1, 1)).float()
+        all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).to(options.device).long().view(-1, 1, 1)).float()
         plane_depth_one_hot = (all_depths * all_masks_one_hot).sum(0, keepdim=True)
         result['plane_depth_one_hot'] = plane_depth_one_hot.unsqueeze(1)
         return result    
@@ -607,7 +608,7 @@ class RefineModel(nn.Module):
              [0,  1.18821287,  0.5],
              [0,           0,    1]]
         with torch.no_grad():
-            self.intrinsics = torch.Tensor(K).cuda()
+            self.intrinsics = torch.Tensor(K).to(options.device)
             pass
         """ the whole network """
 
@@ -646,7 +647,7 @@ class RefineModel(nn.Module):
             all_depths = torch.cat([result['depth'].squeeze(1), plane_depths], dim=0)
             plane_depth = (all_depths * all_masks).sum(0, keepdim=True)
 
-            all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).cuda().long().view(-1, 1, 1)).float()
+            all_masks_one_hot = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).to(options.device).long().view(-1, 1, 1)).float()
             plane_depth_one_hot = (all_depths * all_masks_one_hot).sum(0, keepdim=True)
             result = {'mask': masks, 'plane': planes, 'depth': depth_np.unsqueeze(1), 'plane_depth': plane_depth.unsqueeze(1), 'plane_depth_one_hot': plane_depth_one_hot.unsqueeze(1)}
             results.append(result)        

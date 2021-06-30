@@ -37,7 +37,7 @@ class PlaneRCNNDetector():
         self.config = config
         self.modelType = modelType
         self.model = MaskRCNN(config)
-        self.model.cuda()
+        self.model.to(options.device)
         self.model.eval()
 
         if modelType == 'basic':
@@ -63,24 +63,24 @@ class PlaneRCNNDetector():
 
         if not separate:
             if options.startEpoch >= 0:
-                self.model.load_state_dict(torch.load(checkpoint_dir + '/checkpoint_' + str(options.startEpoch) + '.pth'))
+                self.model.load_state_dict(torch.load(checkpoint_dir + '/checkpoint_' + str(options.startEpoch) + '.pth', map_location=options.device))
             else:
-                self.model.load_state_dict(torch.load(checkpoint_dir + '/checkpoint.pth'))
+                self.model.load_state_dict(torch.load(checkpoint_dir + '/checkpoint.pth', map_location=options.device))
                 pass
             pass
 
         if 'refine' in modelType or 'final' in modelType:
             self.refine_model = RefineModel(options)
 
-            self.refine_model.cuda()
+            self.refine_model.to(options.device)
             self.refine_model.eval()
             if not separate:
-                state_dict = torch.load(checkpoint_dir + '/checkpoint_refine.pth')
+                state_dict = torch.load(checkpoint_dir + '/checkpoint_refine.pth', map_location=options.device)
                 self.refine_model.load_state_dict(state_dict)
                 pass
             else:
-                self.model.load_state_dict(torch.load('checkpoint/pair_' + options.anchorType + '_pair/checkpoint.pth'))
-                self.refine_model.load_state_dict(torch.load('checkpoint/instance_normal_refine_mask_softmax_valid/checkpoint_refine.pth'))
+                self.model.load_state_dict(torch.load('checkpoint/pair_' + options.anchorType + '_pair/checkpoint.pth', map_location=options.device))
+                self.refine_model.load_state_dict(torch.load('checkpoint/instance_normal_refine_mask_softmax_valid/checkpoint_refine.pth', map_location=options.device))
                 pass
             pass
 
@@ -90,9 +90,9 @@ class PlaneRCNNDetector():
 
         input_pair = []
         detection_pair = []
-        camera = sample[30][0].cuda()
+        camera = sample[30][0].to(self.options.device)
         for indexOffset in [0, ]:
-            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda()
+            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].to(self.options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(self.options.device), sample[indexOffset + 3].to(self.options.device), sample[indexOffset + 4].to(self.options.device), sample[indexOffset + 5].to(self.options.device), sample[indexOffset + 6].to(self.options.device), sample[indexOffset + 7].to(self.options.device), sample[indexOffset + 8].to(self.options.device), sample[indexOffset + 9].to(self.options.device), sample[indexOffset + 10].to(self.options.device), sample[indexOffset + 11].to(self.options.device)
             rpn_class_logits, rpn_pred_bbox, target_class_ids, mrcnn_class_logits, target_deltas, mrcnn_bbox, target_mask, mrcnn_mask, target_parameters, mrcnn_parameters, detections, detection_masks, detection_gt_parameters, detection_gt_masks, rpn_rois, roi_features, roi_indices, depth_np_pred = self.model.predict([images, image_metas, gt_class_ids, gt_boxes, gt_masks, gt_parameters, camera], mode='inference_detection', use_nms=2, use_refinement=True)
 
             if len(detections) > 0:
@@ -105,14 +105,14 @@ class PlaneRCNNDetector():
             input_pair.append({'image': images, 'depth': gt_depth, 'mask': gt_masks, 'bbox': gt_boxes, 'extrinsics': extrinsics, 'segmentation': gt_segmentation, 'camera': camera})
 
             if 'nyu_dorn_only' in self.options.dataset:
-                XYZ_pred[1:2] = sample[27].cuda()
+                XYZ_pred[1:2] = sample[27].to(self.options.device)
                 pass
 
             detection_pair.append({'XYZ': XYZ_pred, 'depth': XYZ_pred[1:2], 'mask': detection_mask, 'detection': detections, 'masks': detection_masks, 'depth_np': depth_np_pred, 'plane_XYZ': plane_XYZ})
             continue
 
         if ('refine' in self.modelType or 'refine' in self.options.suffix):
-            pose = sample[26][0].cuda()
+            pose = sample[26][0].to(self.options.device)
             pose = torch.cat([pose[0:3], pose[3:6] * pose[6]], dim=0)
             pose_gt = torch.cat([pose[0:1], -pose[2:3], pose[1:2], pose[3:4], -pose[5:6], pose[4:5]], dim=0).unsqueeze(0)
             camera = camera.unsqueeze(0)
@@ -122,7 +122,7 @@ class PlaneRCNNDetector():
 
                 new_input_dict = {k: v for k, v in input_dict.items()}
                 new_input_dict['image'] = (input_dict['image'] + self.config.MEAN_PIXEL_TENSOR.view((-1, 1, 1))) / 255.0 - 0.5
-                new_input_dict['image_2'] = (sample[13].cuda() + self.config.MEAN_PIXEL_TENSOR.view((-1, 1, 1))) / 255.0 - 0.5
+                new_input_dict['image_2'] = (sample[13].to(self.options.device) + self.config.MEAN_PIXEL_TENSOR.view((-1, 1, 1))) / 255.0 - 0.5
                 detections = detection_dict['detection']
                 detection_masks = detection_dict['masks']
                 depth_np = detection_dict['depth_np']
@@ -153,9 +153,9 @@ class PlaneRCNNDetector():
 
                 masks_small = all_masks[1:]
                 all_masks = torch.nn.functional.interpolate(all_masks.unsqueeze(1), size=(480, 640), mode='bilinear').squeeze(1)
-                all_masks = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).cuda().long().view((-1, 1, 1))).float()
+                all_masks = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).to(self.options.device).long().view((-1, 1, 1))).float()
                 masks = all_masks[1:]
-                detection_masks = torch.zeros(detection_dict['masks'].shape).cuda()
+                detection_masks = torch.zeros(detection_dict['masks'].shape).to(self.options.device)
                 detection_masks[:, 80:560] = masks
 
 
@@ -191,7 +191,7 @@ class DepthDetector():
         self.modelType = modelType
 
         self.model = MaskRCNNDepth(config)
-        self.model.cuda()
+        self.model.to(self.options.device)
         self.model.eval()
 
         checkpoint_dir = checkpoint_dir if checkpoint_dir != '' else 'checkpoint/depth_np'
@@ -203,16 +203,16 @@ class DepthDetector():
 
     def detect(self, sample):
         detection_pair = []
-        camera = sample[30][0].cuda()
+        camera = sample[30][0].to(self.options.device)
         for indexOffset in [0, ]:
-            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda()
+            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].to(self.options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(self.options.device), sample[indexOffset + 3].to(self.options.device), sample[indexOffset + 4].to(self.options.device), sample[indexOffset + 5].to(self.options.device), sample[indexOffset + 6].to(self.options.device), sample[indexOffset + 7].to(self.options.device), sample[indexOffset + 8].to(self.options.device), sample[indexOffset + 9].to(self.options.device), sample[indexOffset + 10].to(self.options.device), sample[indexOffset + 11].to(self.options.device)
 
             depth_np_pred = self.model.predict([images, camera], mode='inference_detection', use_nms=2, use_refinement='refinement' in self.options.suffix)
 
             if depth_np_pred.shape != gt_depth.shape:
                 depth_np_pred = torch.nn.functional.interpolate(depth_np_pred.unsqueeze(1), size=(640, 640), mode='bilinear').squeeze(1)
                 pass
-            detection_pair.append({'depth': depth_np_pred, 'mask': torch.ones(depth_np_pred.shape).cuda()})
+            detection_pair.append({'depth': depth_np_pred, 'mask': torch.ones(depth_np_pred.shape).to(self.options.device)})
             continue
         return detection_pair
 
@@ -230,7 +230,7 @@ class PlaneNetDetector():
 
         detection_pair = []
         for indexOffset in [0, ]:
-            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda()
+            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].to(self.options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(self.options.device), sample[indexOffset + 3].to(self.options.device), sample[indexOffset + 4].to(self.options.device), sample[indexOffset + 5].to(self.options.device), sample[indexOffset + 6].to(self.options.device), sample[indexOffset + 7].to(self.options.device), sample[indexOffset + 8].to(self.options.device), sample[indexOffset + 9].to(self.options.device), sample[indexOffset + 10].to(self.options.device), sample[indexOffset + 11].to(self.options.device)
 
             image = (images[0].detach().cpu().numpy().transpose((1, 2, 0)) + self.config.MEAN_PIXEL)[80:560]
 
@@ -245,9 +245,9 @@ class PlaneNetDetector():
             depth = np.concatenate([np.zeros((80, 640), dtype=np.int32), depth, np.zeros((80, 640), dtype=np.int32)], axis=0)
             detections = np.concatenate([np.ones((len(planes), 4)), np.ones((len(planes), 2)), planes], axis=-1)
 
-            detections = torch.from_numpy(detections).float().cuda()
-            depth = torch.from_numpy(depth).unsqueeze(0).float().cuda()
-            masks = torch.from_numpy(masks).float().cuda()
+            detections = torch.from_numpy(detections).float().to(self.options.device)
+            depth = torch.from_numpy(depth).unsqueeze(0).float().to(self.options.device)
+            masks = torch.from_numpy(masks).float().to(self.options.device)
             detection_pair.append({'depth': depth, 'mask': masks.sum(0, keepdim=True), 'masks': masks, 'detection': detections})
             continue
         return detection_pair
@@ -265,9 +265,9 @@ class PlaneRecoverDetector():
     def detect(self, sample):
 
         detection_pair = []
-        camera = sample[30][0].cuda()
+        camera = sample[30][0].to(self.options.device)
         for indexOffset in [0, ]:
-            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda()
+            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].to(self.options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(self.options.device), sample[indexOffset + 3].to(self.options.device), sample[indexOffset + 4].to(self.options.device), sample[indexOffset + 5].to(self.options.device), sample[indexOffset + 6].to(self.options.device), sample[indexOffset + 7].to(self.options.device), sample[indexOffset + 8].to(self.options.device), sample[indexOffset + 9].to(self.options.device), sample[indexOffset + 10].to(self.options.device), sample[indexOffset + 11].to(self.options.device)
 
             image = (images[0].detach().cpu().numpy().transpose((1, 2, 0)) + self.config.MEAN_PIXEL)[80:560]
 
@@ -280,9 +280,9 @@ class PlaneRecoverDetector():
             masks = (segmentation == np.arange(len(planes), dtype=np.int32).reshape((-1, 1, 1))).astype(np.float32)
             detections = np.concatenate([np.ones((len(planes), 4)), np.ones((len(planes), 2)), planes], axis=-1)
 
-            detections = torch.from_numpy(detections).float().cuda()
-            masks = torch.from_numpy(masks).float().cuda()
-            XYZ_pred, detection_mask, plane_XYZ = calcXYZModule(self.config, camera, detections, masks, torch.zeros((1, 640, 640)).cuda(), return_individual=True)
+            detections = torch.from_numpy(detections).float().to(self.options.device)
+            masks = torch.from_numpy(masks).float().to(self.options.device)
+            XYZ_pred, detection_mask, plane_XYZ = calcXYZModule(self.config, camera, detections, masks, torch.zeros((1, 640, 640)).to(self.options.device), return_individual=True)
             depth = XYZ_pred[1:2]
             print(planes)
             print(np.unique(segmentation))
@@ -309,7 +309,7 @@ class TraditionalDetector():
     def detect(self, sample):
         detection_pair = []
         for indexOffset in [0, ]:
-            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation, gt_semantics = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda(), sample[indexOffset + 12].cuda()
+            images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation, gt_semantics = sample[indexOffset + 0].to(self.options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(self.options.device), sample[indexOffset + 3].to(self.options.device), sample[indexOffset + 4].to(self.options.device), sample[indexOffset + 5].to(self.options.device), sample[indexOffset + 6].to(self.options.device), sample[indexOffset + 7].to(self.options.device), sample[indexOffset + 8].to(self.options.device), sample[indexOffset + 9].to(self.options.device), sample[indexOffset + 10].to(self.options.device), sample[indexOffset + 11].to(self.options.device), sample[indexOffset + 12].to(self.options.device)
 
             image = (images[0].detach().cpu().numpy().transpose((1, 2, 0)) + self.config.MEAN_PIXEL)[80:560]
 
@@ -343,9 +343,9 @@ class TraditionalDetector():
             depth = np.concatenate([np.zeros((80, 640)), depth, np.zeros((80, 640))], axis=0)
             detections = np.concatenate([np.ones((len(planes), 4)), np.ones((len(planes), 2)), planes], axis=-1)
 
-            detections = torch.from_numpy(detections).float().cuda()
-            depth = torch.from_numpy(depth).unsqueeze(0).float().cuda()
-            masks = torch.from_numpy(masks).float().cuda()
+            detections = torch.from_numpy(detections).float().to(self.options.device)
+            depth = torch.from_numpy(depth).unsqueeze(0).float().to(self.options.device)
+            masks = torch.from_numpy(masks).float().to(self.options.device)
             detection_pair.append({'depth': depth, 'mask': masks.sum(0, keepdim=True), 'masks': masks, 'detection': detections})
             continue
         return detection_pair
@@ -498,7 +498,7 @@ def evaluate(options):
 
     print('the number of images', len(dataset))
 
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=False)#, num_workers=1)
 
     epoch_losses = []
     data_iterator = tqdm(dataloader, total=len(dataset))
@@ -557,11 +557,11 @@ def evaluate(options):
                     break
                 continue
             input_pair = []
-            camera = sample[30][0].cuda()
+            camera = sample[30][0].to(options.device)
             for indexOffset in [0, ]:
-                images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda()
+                images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, planes, gt_segmentation = sample[indexOffset + 0].to(options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(options.device), sample[indexOffset + 3].to(options.device), sample[indexOffset + 4].to(options.device), sample[indexOffset + 5].to(options.device), sample[indexOffset + 6].to(options.device), sample[indexOffset + 7].to(options.device), sample[indexOffset + 8].to(options.device), sample[indexOffset + 9].to(options.device), sample[indexOffset + 10].to(options.device), sample[indexOffset + 11].to(options.device)
 
-                masks = (gt_segmentation == torch.arange(gt_segmentation.max() + 1).cuda().view(-1, 1, 1)).float()
+                masks = (gt_segmentation == torch.arange(gt_segmentation.max() + 1).to(options.device).view(-1, 1, 1)).float()
                 input_pair.append({'image': images, 'depth': gt_depth, 'bbox': gt_boxes, 'extrinsics': extrinsics, 'segmentation': gt_segmentation, 'camera': camera, 'plane': planes[0], 'masks': masks, 'mask': gt_masks})
                 continue
 

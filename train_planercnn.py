@@ -45,9 +45,9 @@ def train(options):
 
     model = MaskRCNN(config)
     refine_model = RefineModel(options)
-    model.cuda()
+    model.to(options.device)
     model.train()    
-    refine_model.cuda()
+    refine_model.to(options.device)
     refine_model.train()    
 
     if options.restore == 1:
@@ -115,9 +115,9 @@ def train(options):
             detection_pair = []
             dicts_pair = []
 
-            camera = sample[30][0].cuda()                
+            camera = sample[30][0].to(options.device)                
             for indexOffset in [0, 13]:
-                images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, gt_plane, gt_segmentation, plane_indices = sample[indexOffset + 0].cuda(), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].cuda(), sample[indexOffset + 3].cuda(), sample[indexOffset + 4].cuda(), sample[indexOffset + 5].cuda(), sample[indexOffset + 6].cuda(), sample[indexOffset + 7].cuda(), sample[indexOffset + 8].cuda(), sample[indexOffset + 9].cuda(), sample[indexOffset + 10].cuda(), sample[indexOffset + 11].cuda(), sample[indexOffset + 12].cuda()
+                images, image_metas, rpn_match, rpn_bbox, gt_class_ids, gt_boxes, gt_masks, gt_parameters, gt_depth, extrinsics, gt_plane, gt_segmentation, plane_indices = sample[indexOffset + 0].to(options.device), sample[indexOffset + 1].numpy(), sample[indexOffset + 2].to(options.device), sample[indexOffset + 3].to(options.device), sample[indexOffset + 4].to(options.device), sample[indexOffset + 5].to(options.device), sample[indexOffset + 6].to(options.device), sample[indexOffset + 7].to(options.device), sample[indexOffset + 8].to(options.device), sample[indexOffset + 9].to(options.device), sample[indexOffset + 10].to(options.device), sample[indexOffset + 11].to(options.device), sample[indexOffset + 12].to(options.device)
 
                 if indexOffset == 13:
                     input_pair.append({'image': images, 'depth': gt_depth, 'mask': gt_masks, 'bbox': gt_boxes, 'extrinsics': extrinsics, 'segmentation': gt_segmentation, 'plane': gt_plane, 'camera': camera})
@@ -151,9 +151,9 @@ def train(options):
                     XYZ_pred, detection_mask, plane_XYZ = calcXYZModule(config, camera, detections, detection_masks, depth_np_pred, return_individual=True)
                     detection_mask = detection_mask.unsqueeze(0)                        
                 else:
-                    XYZ_pred = torch.zeros((3, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).cuda()
-                    detection_mask = torch.zeros((1, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).cuda()
-                    plane_XYZ = torch.zeros((1, 3, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).cuda()                        
+                    XYZ_pred = torch.zeros((3, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).to(options.device)
+                    detection_mask = torch.zeros((1, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).to(options.device)
+                    plane_XYZ = torch.zeros((1, 3, config.IMAGE_MAX_DIM, config.IMAGE_MAX_DIM)).to(options.device)                        
                     pass
 
 
@@ -169,7 +169,7 @@ def train(options):
                         all_masks = all_masks / all_masks.sum(0, keepdim=True)
                         all_depths = torch.cat([depth_np_pred, plane_XYZ[:, 1]], dim=0)
 
-                        depth_loss = l1LossMask(torch.sum(torch.abs(all_depths[:, 80:560] - gt_depth[:, 80:560]) * all_masks[:, 80:560], dim=0), torch.zeros(config.IMAGE_MIN_DIM, config.IMAGE_MAX_DIM).cuda(), (gt_depth[0, 80:560] > 1e-4).float())
+                        depth_loss = l1LossMask(torch.sum(torch.abs(all_depths[:, 80:560] - gt_depth[:, 80:560]) * all_masks[:, 80:560], dim=0), torch.zeros(config.IMAGE_MIN_DIM, config.IMAGE_MAX_DIM).to(options.device), (gt_depth[0, 80:560] > 1e-4).float())
                     else:
                         depth_loss = l1LossMask(depth_np_pred[:, 80:560], gt_depth[:, 80:560], (gt_depth[:, 80:560] > 1e-4).float())
                         pass
@@ -179,7 +179,7 @@ def train(options):
 
             if (len(detection_pair[0]['detection']) > 0 and len(detection_pair[0]['detection']) < 30) and 'refine' in options.suffix:
                 ## Use refinement network
-                pose = sample[26][0].cuda()
+                pose = sample[26][0].to(options.device)
                 pose = torch.cat([pose[0:3], pose[3:6] * pose[6]], dim=0)
                 pose_gt = torch.cat([pose[0:1], -pose[2:3], pose[1:2], pose[3:4], -pose[5:6], pose[4:5]], dim=0).unsqueeze(0)
                 camera = camera.unsqueeze(0)
@@ -222,12 +222,12 @@ def train(options):
                 
 
                 ## Generate supervision target for the refinement network
-                segmentation_one_hot = (segmentation == torch.arange(segmentation.max() + 1).cuda().view((-1, 1, 1, 1))).long()
+                segmentation_one_hot = (segmentation == torch.arange(segmentation.max() + 1).to(options.device).view((-1, 1, 1, 1))).long()
                 intersection = (torch.round(detection_masks).long() * segmentation_one_hot).sum(-1).sum(-1)
                 max_intersection, segments_gt = intersection.max(0)
                 mapping = intersection.max(1)[1]
                 detection_areas = detection_masks.sum(-1).sum(-1)
-                valid_mask = (mapping[segments_gt] == torch.arange(len(segments_gt)).cuda()).float()
+                valid_mask = (mapping[segments_gt] == torch.arange(len(segments_gt)).to(options.device)).float()
 
                 masks_gt_large = (segmentation == segments_gt.view((-1, 1, 1))).float()
                 masks_gt_small = masks_gt_large[:, ::4, ::4]
@@ -237,13 +237,13 @@ def train(options):
                 ## Run the refinement network
                 results = refine_model(image, image_2, camera, masks_inp, detection_dict['detection'][:, 6:9], plane_depth, depth_np)
 
-                plane_depth_loss = torch.zeros(1).cuda()            
-                depth_loss = torch.zeros(1).cuda()
-                plane_loss = torch.zeros(1).cuda()                        
-                mask_loss = torch.zeros(1).cuda()
-                flow_loss = torch.zeros(1).cuda()
-                flow_confidence_loss = torch.zeros(1).cuda()
-                pose_loss = torch.zeros(1).cuda()
+                plane_depth_loss = torch.zeros(1).to(options.device)            
+                depth_loss = torch.zeros(1).to(options.device)
+                plane_loss = torch.zeros(1).to(options.device)                        
+                mask_loss = torch.zeros(1).to(options.device)
+                flow_loss = torch.zeros(1).to(options.device)
+                flow_confidence_loss = torch.zeros(1).to(options.device)
+                pose_loss = torch.zeros(1).to(options.device)
                 for resultIndex, result in enumerate(results[1:]):
                     if 'mask' in result:
                         masks_pred = result['mask'][:, 0]
@@ -262,9 +262,9 @@ def train(options):
                         if 'weight' in options.suffix:
                             mask_loss += torch.nn.functional.cross_entropy(masks_logits, segmentation, weight=detection_weight)
                         else:
-                            mask_loss += torch.nn.functional.cross_entropy(masks_logits, segmentation, weight=torch.cat([torch.ones(1).cuda(), valid_mask], dim=0))
+                            mask_loss += torch.nn.functional.cross_entropy(masks_logits, segmentation, weight=torch.cat([torch.ones(1).to(options.device), valid_mask], dim=0))
                             pass
-                        masks_pred = (masks_pred.max(0, keepdim=True)[1] == torch.arange(len(masks_pred)).cuda().long().view((-1, 1, 1))).float()[1:]
+                        masks_pred = (masks_pred.max(0, keepdim=True)[1] == torch.arange(len(masks_pred)).to(options.device).long().view((-1, 1, 1))).float()[1:]
                         pass                    
                     continue
                 losses += [mask_loss + depth_loss + plane_depth_loss + plane_loss]
@@ -273,9 +273,9 @@ def train(options):
                 all_masks = torch.softmax(masks, dim=0)
                 masks_small = all_masks[1:]
                 all_masks = torch.nn.functional.interpolate(all_masks.unsqueeze(1), size=(480, 640), mode='bilinear').squeeze(1)                        
-                all_masks = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).cuda().long().view((-1, 1, 1))).float()
+                all_masks = (all_masks.max(0, keepdim=True)[1] == torch.arange(len(all_masks)).to(options.device).long().view((-1, 1, 1))).float()
                 masks = all_masks[1:]
-                detection_masks = torch.zeros(detection_dict['masks'].shape).cuda()
+                detection_masks = torch.zeros(detection_dict['masks'].shape).to(options.device)
                 detection_masks[:, 80:560] = masks
                 detection_dict['masks'] = detection_masks
                 results[-1]['mask'] = masks_small
@@ -288,7 +288,7 @@ def train(options):
                     detection_dict['XYZ'] = XYZ_pred
                     pass
             else:
-                losses += [torch.zeros(1).cuda()]
+                losses += [torch.zeros(1).to(options.device)]
                 pass
 
             ## The warping loss
@@ -301,7 +301,7 @@ def train(options):
                 warped_info, valid_mask = warpModuleDepth(config, camera, input_pair[c]['depth'][0], neighbor_info, input_pair[c]['extrinsics'][0], input_pair[1 - c]['extrinsics'][0], width=config.IMAGE_MAX_DIM, height=config.IMAGE_MIN_DIM)
 
                 XYZ = warped_info[:3].view((3, -1))
-                XYZ = torch.cat([XYZ, torch.ones((1, int(XYZ.shape[1]))).cuda()], dim=0)
+                XYZ = torch.cat([XYZ, torch.ones((1, int(XYZ.shape[1]))).to(options.device)], dim=0)
                 transformed_XYZ = torch.matmul(input_pair[c]['extrinsics'][0], torch.matmul(input_pair[1 - c]['extrinsics'][0].inverse(), XYZ))
                 transformed_XYZ = transformed_XYZ[:3].view(detection_dict['XYZ'].shape)
                 warped_depth = transformed_XYZ[1:2]

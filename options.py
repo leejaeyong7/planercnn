@@ -11,6 +11,9 @@ def parse_args():
     Parse input arguments
     """
     parser = argparse.ArgumentParser(description='CornerNet')
+    parser.add_argument('--device', dest='device',
+                        help='device',
+                        default='cpu', type=str)    
     parser.add_argument('--gpu', dest='gpu',
                         help='gpu',
                         default=1, type=int)    

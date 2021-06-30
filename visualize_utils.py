@@ -328,7 +328,7 @@ def visualizeBatchDetection(options, config, input_dict, detection_dict, indexOf
         if 'plane_XYZ' not in detection_dict:
             plane_XYZ = planeXYZModule(config.getRanges(input_dict['camera']), detection_dict['detection'][:, 6:9], width=config.IMAGE_MAX_DIM, height=config.IMAGE_MIN_DIM)
             plane_XYZ = plane_XYZ.transpose(1, 2).transpose(0, 1).transpose(2, 3).transpose(1, 2)
-            zeros = torch.zeros(int(plane_XYZ.shape[0]), 3, (config.IMAGE_MAX_DIM - config.IMAGE_MIN_DIM) // 2, config.IMAGE_MAX_DIM).cuda()
+            zeros = torch.zeros(int(plane_XYZ.shape[0]), 3, (config.IMAGE_MAX_DIM - config.IMAGE_MIN_DIM) // 2, config.IMAGE_MAX_DIM).to(options.device)
             plane_XYZ = torch.cat([zeros, plane_XYZ, zeros], dim=2)
             detection_dict['plane_XYZ'] = plane_XYZ
             pass
