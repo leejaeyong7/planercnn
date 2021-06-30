@@ -1713,7 +1713,7 @@ class MaskRCNN(nn.Module):
         if mode == 'inference':
             ## Network Heads
             ## Proposal classifier and BBox regressor heads
-            mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_parameters = self.classifier(mrcnn_feature_maps, rpn_rois, ranges)
+            mrcnn_class_logits, mrcnn_class, mrcnn_bbox, mrcnn_parameters, _ = self.classifier(mrcnn_feature_maps, rpn_rois, ranges)
 
             ## Detections
             ## output is [batch, num_detections, (y1, x1, y2, x2, class_id, score)] in image coordinates

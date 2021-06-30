@@ -24,10 +24,10 @@ class InferenceDataset(Dataset):
         self.camera = camera
         self.imagePaths = image_list
         self.anchors = generate_pyramid_anchors(config.RPN_ANCHOR_SCALES,
-                                                      config.RPN_ANCHOR_RATIOS,
-                                                      config.BACKBONE_SHAPES,
-                                                      config.BACKBONE_STRIDES,
-                                                      config.RPN_ANCHOR_STRIDE)
+                                                config.RPN_ANCHOR_RATIOS,
+                                                config.BACKBONE_SHAPES,
+                                                config.BACKBONE_STRIDES,
+                                                config.RPN_ANCHOR_STRIDE)
         return
 
     def __getitem__(self, index):

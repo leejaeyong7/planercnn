@@ -170,6 +170,7 @@ class Config(object):
     def __init__(self, options):
         """Set values of computed attributes."""
         self.options = options
+
         # Effective batch size
         if self.GPU_COUNT > 0:
             self.BATCH_SIZE = self.IMAGES_PER_GPU * self.GPU_COUNT
