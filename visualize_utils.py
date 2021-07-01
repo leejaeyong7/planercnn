@@ -12,9 +12,9 @@ import numpy as np
 from skimage.measure import find_contours
 import cv2
 
-from models.model import detection_layer, unmold_detections
-from models.modules import *
-from utils import *
+from .models.model import detection_layer, unmold_detections
+from .models.modules import *
+from .utils import *
 
 
 def tileImages(image_list, padding_x=5, padding_y=5, background_color=0):

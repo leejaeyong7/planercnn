@@ -9,6 +9,7 @@ import math
 import numpy as np
 import os
 import torch
+from pathlib import Path
 
 # Base Configuration Class
 # Don't use this class directly. Instead, sub-class it and override
@@ -199,7 +200,7 @@ class Config(object):
               int(math.ceil(self.IMAGE_SHAPE[1] / stride))]
              for stride in self.BACKBONE_STRIDES])
 
-        self.dataFolder = options.anchorFolder
+        self.dataFolder = str(Path(__file__).parent / options.anchorFolder)
         
         self.OCCLUSION = 'occlusion' in options.dataset
         

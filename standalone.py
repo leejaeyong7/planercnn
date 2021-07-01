@@ -16,29 +16,194 @@ import cv2
 import copy
 import glob
 
-from models.model import *
-from models.refinement_net import RefineModel
-from models.modules import *
-from utils import *
-from visualize_utils import *
-from evaluate_utils import *
-from plane_utils import *
-from options import parse_args
-from config import InferenceConfig
+from .models.model import *
+from .models.refinement_net import RefineModel
+from .models.modules import *
+from .visualize_utils import *
+from .evaluate_utils import *
+from .plane_utils import *
+from .options import parse_args
+from .config import InferenceConfig
 from pathlib import Path
-from utils import *
-from datasets.plane_dataset import *
+from .utils import *
 import json
 from argparse import Namespace
 
+def build_rpn_targets(image_shape, anchors, gt_class_ids, gt_boxes, config):
+    """Given the anchors and GT boxes, compute overlaps and identify positive
+    anchors and deltas to refine them to match their corresponding GT boxes.
 
-class PlaneRCNN(nn.Module):
+    anchors: [num_anchors, (y1, x1, y2, x2)]
+    gt_class_ids: [num_gt_boxes] Integer class IDs.
+    gt_boxes: [num_gt_boxes, (y1, x1, y2, x2)]
+
+    Returns:
+    rpn_match: [N] (int32) matches between anchors and GT boxes.
+               1 = positive anchor, -1 = negative anchor, 0 = neutral
+    rpn_bbox: [N, (dy, dx, log(dh), log(dw))] Anchor bbox deltas.
+    """
+    ## RPN Match: 1 = positive anchor, -1 = negative anchor, 0 = neutral
+    rpn_match = np.zeros([anchors.shape[0]], dtype=np.int32)
+    ## RPN bounding boxes: [max anchors per image, (dy, dx, log(dh), log(dw))]
+    rpn_bbox = np.zeros((config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4))
+
+    ## Handle COCO crowds
+    ## A crowd box in COCO is a bounding box around several instances. Exclude
+    ## them from training. A crowd box is given a negative class ID.
+    no_crowd_bool = np.ones([anchors.shape[0]], dtype=bool)
+    
+    ## Compute overlaps [num_anchors, num_gt_boxes]
+    overlaps = compute_overlaps(anchors, gt_boxes)
+
+    ## Match anchors to GT Boxes
+    ## If an anchor overlaps a GT box with IoU >= 0.7 then it's positive.
+    ## If an anchor overlaps a GT box with IoU < 0.3 then it's negative.
+    ## Neutral anchors are those that don't match the conditions above,
+    ## and they don't influence the loss function.
+    ## However, don't keep any GT box unmatched (rare, but happens). Instead,
+    ## match it to the closest anchor (even if its max IoU is < 0.3).
+    #
+    ## 1. Set negative anchors first. They get overwritten below if a GT box is
+    ## matched to them. Skip boxes in crowd areas.
+    anchor_iou_argmax = np.argmax(overlaps, axis=1)
+    anchor_iou_max = overlaps[np.arange(overlaps.shape[0]), anchor_iou_argmax]
+    rpn_match[(anchor_iou_max < 0.3) & (no_crowd_bool)] = -1
+    ## 2. Set an anchor for each GT box (regardless of IoU value).
+    ## TODO: If multiple anchors have the same IoU match all of them
+    gt_iou_argmax = np.argmax(overlaps, axis=0)
+    rpn_match[gt_iou_argmax] = 1
+    ## 3. Set anchors with high overlap as positive.
+    rpn_match[anchor_iou_max >= 0.7] = 1
+
+    ## Subsample to balance positive and negative anchors
+    ## Don't let positives be more than half the anchors
+    ids = np.where(rpn_match == 1)[0]
+    extra = len(ids) - (config.RPN_TRAIN_ANCHORS_PER_IMAGE // 2)
+    if extra > 0:
+        ## Reset the extra ones to neutral
+        ids = np.random.choice(ids, extra, replace=False)
+        rpn_match[ids] = 0
+    ## Same for negative proposals
+    ids = np.where(rpn_match == -1)[0]
+    extra = len(ids) - (config.RPN_TRAIN_ANCHORS_PER_IMAGE -
+                        np.sum(rpn_match == 1))
+    if extra > 0:
+        ## Rest the extra ones to neutral
+        ids = np.random.choice(ids, extra, replace=False)
+        rpn_match[ids] = 0
+
+    ## For positive anchors, compute shift and scale needed to transform them
+    ## to match the corresponding GT boxes.
+    ids = np.where(rpn_match == 1)[0]
+    ix = 0  ## index into rpn_bbox
+    ## TODO: use box_refinment() rather than duplicating the code here
+    for i, a in zip(ids, anchors[ids]):
+        ## Closest gt box (it might have IoU < 0.7)
+        gt = gt_boxes[anchor_iou_argmax[i]]
+
+        ## Convert coordinates to center plus width/height.
+        ## GT Box
+        gt_h = gt[2] - gt[0]
+        gt_w = gt[3] - gt[1]
+        gt_center_y = gt[0] + 0.5 * gt_h
+        gt_center_x = gt[1] + 0.5 * gt_w
+        ## Anchor
+        a_h = a[2] - a[0]
+        a_w = a[3] - a[1]
+        a_center_y = a[0] + 0.5 * a_h
+        a_center_x = a[1] + 0.5 * a_w
+
+        ## Compute the bbox refinement that the RPN should predict.
+        rpn_bbox[ix] = [
+            (gt_center_y - a_center_y) / a_h,
+            (gt_center_x - a_center_x) / a_w,
+            np.log(gt_h / a_h),
+            np.log(gt_w / a_w),
+        ]
+        ## Normalize
+        rpn_bbox[ix] /= config.RPN_BBOX_STD_DEV
+        ix += 1
+
+    return rpn_match, rpn_bbox
+
+
+def load_image_gt(config, image_id, image, depth, mask, class_ids, parameters, augment=False,
+                  use_mini_mask=True):
+    """Load and return ground truth data for an image (image, mask, bounding boxes).
+
+    augment: If true, apply random image augmentation. Currently, only
+        horizontal flipping is offered.
+    use_mini_mask: If False, returns full-size masks that are the same height
+        and width as the original image. These can be big, for example
+        1024x1024x100 (for 100 instances). Mini masks are smaller, typically,
+        224x224 and are generated by extracting the bounding box of the
+        object and resizing it to MINI_MASK_SHAPE.
+
+    Returns:
+    image: [height, width, 3]
+    shape: the original shape of the image before resizing and cropping.
+    class_ids: [instance_count] Integer class IDs
+    bbox: [instance_count, (y1, x1, y2, x2)]
+    mask: [height, width, instance_count]. The height and width are those
+        of the image unless use_mini_mask is True, in which case they are
+        defined in MINI_MASK_SHAPE.
+    """
+    ## Load image and mask
+    shape = image.shape
+    image, window, scale, padding = resize_image(
+        image,
+        min_dim=config.IMAGE_MAX_DIM,
+        max_dim=config.IMAGE_MAX_DIM,
+        padding=config.IMAGE_PADDING)
+
+    mask = resize_mask(mask, scale, padding)
+    
+    ## Random horizontal flips.
+    if augment and False:
+        if np.random.randint(0, 1):
+            image = np.fliplr(image)
+            mask = np.fliplr(mask)
+            depth = np.fliplr(depth)            
+            pass
+        pass
+
+    ## Bounding boxes. Note that some boxes might be all zeros
+    ## if the corresponding mask got cropped out.
+    ## bbox: [num_instances, (y1, x1, y2, x2)]
+    bbox = extract_bboxes(mask)
+    ## Resize masks to smaller size to reduce memory usage
+    if use_mini_mask:
+        mask = minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
+        pass
+
+    active_class_ids = np.ones(config.NUM_CLASSES, dtype=np.int32)
+    ## Image meta data
+    image_meta = compose_image_meta(image_id, shape, window, active_class_ids)
+
+    if config.NUM_PARAMETER_CHANNELS > 0:
+        if config.OCCLUSION:
+            depth = resize_mask(depth, scale, padding)            
+            mask_visible = minimize_mask(bbox, depth, config.MINI_MASK_SHAPE)
+            mask = np.stack([mask, mask_visible], axis=-1)
+        else:
+            depth = np.expand_dims(depth, -1)
+            depth = resize_mask(depth, scale, padding).squeeze(-1)
+            depth = minimize_depth(bbox, depth, config.MINI_MASK_SHAPE)
+            mask = np.stack([mask, depth], axis=-1)
+            pass
+        pass
+    return image, image_meta, class_ids, bbox, mask, parameters
+
+
+class PlaneRCNNNormalEstimator(nn.Module):
     def __init__(self, args):
+        super(PlaneRCNNNormalEstimator, self).__init__()
+        self.args = args
         option_file = Path(__file__).parent / 'options.json'
 
         with open(option_file, 'r') as f:
             options_dict = json.load(f)
-        self.options = Namespace(**vars(options_dict))
+        self.options = Namespace(**options_dict)
         config = InferenceConfig(self.options)
         self.config = config
         self.detector = PlaneRCNNDetector(self.options, self.config, 'final')
@@ -55,8 +220,8 @@ class PlaneRCNN(nn.Module):
         masks = []
         for K, image in zip(Ks, images):
             H, W = images.shape[-2:]
-            sample = self.preproces_input(Ks, images)
-            res = self.detector(sample)[0]
+            sample = self.preprocess_input(Ks, images)
+            res = self.detector.detect(sample)[0]
             min_y = sample[1][0, 4]
             min_x = sample[1][0, 5]
             max_y = sample[1][0, 6]
@@ -65,10 +230,11 @@ class PlaneRCNN(nn.Module):
             plane_normals = NF.normalize(res['detection'][:, 6:9], p=2, dim=-1).view(-1, 3, 1, 1)
             plane_normals = plane_normals[:, [0, 2, 1]]
             plane_normals[:, 0] *= -1
+            plane_normals[:, 2] *= -1
             merged_normal = (res['masks'].unsqueeze(1) * plane_normals).sum(0, keepdim=True)
             mask = res['mask'].unsqueeze(1)
-            crop_normal = merged_normal[..., min_y:max_y, min_x:max_y]
-            crop_mask = mask[..., min_y:max_y, min_x:max_y]
+            crop_normal = merged_normal[..., min_y:max_y, min_x:max_x]
+            crop_mask = mask[..., min_y:max_y, min_x:max_x]
 
             full_normal_image = NF.interpolate(crop_normal, (H, W), mode='nearest')
             full_mask = NF.interpolate(crop_mask, (H, W), mode='nearest')
@@ -84,8 +250,9 @@ class PlaneRCNN(nn.Module):
         cx = Ks[0, 0, 2]
         cy = Ks[0, 1, 2]
         index = 0
-        camera = torch.Tensor([fx, fy, cx, cy, W, H], device=dev)
-        image = NF.interpolate(images, (480, 640))
+        camera = torch.Tensor([fx, fy, cx, cy, W, H]).cpu().numpy()
+        image = (NF.interpolate(images, (480, 640)).cpu()[0].permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         extrinsics = np.eye(4, dtype=np.float32)
 
         ## The below codes just fill in dummy values for all other data entries which are not used for inference. You can ignore everything except some preprocessing operations on "image".
@@ -134,7 +301,7 @@ class PlaneRCNN(nn.Module):
 
         ## Add to batch
         rpn_match = rpn_match[:, np.newaxis]
-        image = utils.mold_image(image.astype(np.float32), self.config)
+        image = mold_image(image.astype(np.float32), self.config)
 
         depth = np.concatenate([np.zeros((80, 640)), depth, np.zeros((80, 640))], axis=0).astype(np.float32)
         segmentation = np.concatenate([np.full((80, 640), fill_value=-1), segmentation, np.full((80, 640), fill_value=-1)], axis=0).astype(np.float32)
@@ -148,7 +315,8 @@ class PlaneRCNN(nn.Module):
         data_pair.append(planes)
         data_pair.append(np.zeros((len(planes), len(planes))))
         data_pair.append(camera.astype(np.float32))
-        return data_pair
+        tensor_pair = [torch.from_numpy(d).to(dev).unsqueeze(0) for d in data_pair]
+        return tensor_pair
 
 class PlaneRCNNDetector():
     def __init__(self, options, config, modelType):
@@ -158,7 +326,7 @@ class PlaneRCNNDetector():
         self.model = MaskRCNN(config)
         self.model.to(options.device)
         self.model.eval()
-        ckpt_dir = Path(__file__) / 'checkpoint' / 'planercnn_normal_warping_refine'
+        ckpt_dir = Path(__file__).parent / 'checkpoint' / 'planercnn_normal_warping_refine'
         self.model.load_state_dict(torch.load(ckpt_dir / 'checkpoint.pth', map_location=options.device))
 
         self.refine_model = RefineModel(options)

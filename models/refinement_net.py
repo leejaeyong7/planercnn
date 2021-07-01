@@ -10,8 +10,8 @@ import torch.nn as nn
 import numpy as np
 import os
 
-from models.modules import *
-from utils import *
+from .modules import *
+from .utils import *
 
 class RefinementBlockParameter(torch.nn.Module):
    def __init__(self):

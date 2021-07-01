@@ -12,8 +12,8 @@ import time
 import os
 import cv2
 import sys
-import utils
-from datasets.scannet_scene import ScanNetScene
+from .utils import *
+from .scannet_scene import ScanNetScene
 
 class PlaneDatasetSingle(Dataset):
     def __init__(self, options, config, split, random=True, loadNeighborImage=False, load_semantics=False, load_boundary=False):
@@ -454,13 +454,13 @@ def load_image_gt(config, image_id, image, depth, mask, class_ids, parameters, a
     """
     ## Load image and mask
     shape = image.shape
-    image, window, scale, padding = utils.resize_image(
+    image, window, scale, padding = resize_image(
         image,
         min_dim=config.IMAGE_MAX_DIM,
         max_dim=config.IMAGE_MAX_DIM,
         padding=config.IMAGE_PADDING)
 
-    mask = utils.resize_mask(mask, scale, padding)
+    mask = resize_mask(mask, scale, padding)
     
     ## Random horizontal flips.
     if augment and False:
@@ -474,25 +474,25 @@ def load_image_gt(config, image_id, image, depth, mask, class_ids, parameters, a
     ## Bounding boxes. Note that some boxes might be all zeros
     ## if the corresponding mask got cropped out.
     ## bbox: [num_instances, (y1, x1, y2, x2)]
-    bbox = utils.extract_bboxes(mask)
+    bbox = extract_bboxes(mask)
     ## Resize masks to smaller size to reduce memory usage
     if use_mini_mask:
-        mask = utils.minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
+        mask = minimize_mask(bbox, mask, config.MINI_MASK_SHAPE)
         pass
 
     active_class_ids = np.ones(config.NUM_CLASSES, dtype=np.int32)
     ## Image meta data
-    image_meta = utils.compose_image_meta(image_id, shape, window, active_class_ids)
+    image_meta = compose_image_meta(image_id, shape, window, active_class_ids)
 
     if config.NUM_PARAMETER_CHANNELS > 0:
         if config.OCCLUSION:
-            depth = utils.resize_mask(depth, scale, padding)            
-            mask_visible = utils.minimize_mask(bbox, depth, config.MINI_MASK_SHAPE)
+            depth = resize_mask(depth, scale, padding)            
+            mask_visible = minimize_mask(bbox, depth, config.MINI_MASK_SHAPE)
             mask = np.stack([mask, mask_visible], axis=-1)
         else:
             depth = np.expand_dims(depth, -1)
-            depth = utils.resize_mask(depth, scale, padding).squeeze(-1)
-            depth = utils.minimize_depth(bbox, depth, config.MINI_MASK_SHAPE)
+            depth = resize_mask(depth, scale, padding).squeeze(-1)
+            depth = minimize_depth(bbox, depth, config.MINI_MASK_SHAPE)
             mask = np.stack([mask, depth], axis=-1)
             pass
         pass
